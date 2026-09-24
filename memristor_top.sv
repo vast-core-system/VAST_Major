@@ -1,126 +1,89 @@
 `timescale 1ns/1ps
 
 module memristor_top #(
-    parameter integer ROWS = 4,
+    parameter integer ROWS = 4,   //Fixed parameters for 4x4 matrix
     parameter integer COLS = 4
 )(
     input  logic clk,
     input  logic rst,
 
-    // ============================================================
-    // PROGRAMMING INTERFACE
-    // ============================================================
 
-    input  logic        load_enable,
-    input  logic [1:0]  row_sel,
-    input  logic [1:0]  col_sel,
-    input  logic [7:0]  weight_data,
+    input  logic        load_enable,  // Logic signal to indicate when a memristor can be programmed with a particular weight
+    input  logic [1:0]  row_sel,  //Used to choose row of specific memmristor
+    input  logic [1:0]  col_sel,  //Used to choose column of specific memmristor
+    input  logic [7:0]  weight_data,  //8-bit weight data, comes from the NN, to program the memristor
 
-    // ============================================================
-    // MAC INPUT
-    // ============================================================
 
-    input logic [7:0] x [0:ROWS-1],
+    input logic [7:0] x [0:ROWS-1],  //Input matrix for MAC computation
 
-    // ============================================================
-    // MAC OUTPUT
-    // ============================================================
 
-    output logic [17:0] y [0:COLS-1],
+    output logic [17:0] y [0:COLS-1],  //Output matrix for post-MAC computation
 
-    // ============================================================
-    // STATUS
-    // ============================================================
 
-    output logic busy,
+    output logic busy,  // busy, done -> Internal FSM signals to indicate when a memristor is being programmed, and when it is finished
     output logic done
 );
 
 
-    // ============================================================
-    // CONSTANTS
-    // ============================================================
-
-    localparam integer STATE_SCALE = 65536;
+    localparam integer STATE_SCALE = 65536;  // Scale-down factor for Q16.16 representation
 
     // Q16.16 programming voltages
 
     localparam signed [31:0] V_UP =
-        32'sd19661;       // +0.30 V
+    32'sd19661;       // +0.30 V -> Used when state variable (w) value to be increased while programming
 
     localparam signed [31:0] V_DOWN =
-        -32'sd13107;      // -0.20 V
-
-    // Target-state tolerance
-
-    localparam integer STATE_TOLERANCE = 200;
+    -32'sd13107;      // -0.20 V -> Used when state variable (w) value to be decreased while programming
 
 
-    // ============================================================
-    // VTEAM ARRAY
-    // ============================================================
+    localparam integer STATE_TOLERANCE = 200; //Tolerance value for target state, converts to 0.00305175781
 
-    logic signed [31:0] cell_voltage [0:ROWS-1][0:COLS-1];
-
-    logic [31:0] resistance [0:ROWS-1][0:COLS-1];
-
-    logic signed [31:0] current [0:ROWS-1][0:COLS-1];
-
-    logic [31:0] state_var [0:ROWS-1][0:COLS-1];
-
-    logic [1:0] ternary_output [0:ROWS-1][0:COLS-1];
+    // If programmed state, is within this limit of target state, we can stop programming
 
 
-    // ============================================================
-    // DIGITAL WEIGHTS USED BY MAC
-    // ============================================================
+   // VTEAM memristor inputs and outputs
+    
+    logic signed [31:0] cell_voltage [0:ROWS-1][0:COLS-1]; // Memristor voltages
 
-    logic [7:0] w [0:ROWS-1][0:COLS-1];
+    logic [31:0] resistance [0:ROWS-1][0:COLS-1]; // Memristance
 
+    logic signed [31:0] current [0:ROWS-1][0:COLS-1]; // Memristor current
 
-    // ============================================================
-    // PROGRAMMING CONTROL SIGNALS
-    // ============================================================
+    logic [31:0] state_var [0:ROWS-1][0:COLS-1]; // State variable 'w' values
 
-    logic [31:0] target_state;
-
-    logic [31:0] selected_state;
-
-    logic signed [31:0] program_voltage;
+    logic [1:0] ternary_output [0:ROWS-1][0:COLS-1];  //Quantised ternary state matrix
 
 
-    // ============================================================
-    // FSM
-    // ============================================================
+    logic [7:0] w [0:ROWS-1][0:COLS-1]; //Weight matrix
+
+    logic [31:0] target_state;  //Target state variable value
+
+    logic [31:0] selected_state;  //Current selected state value
+
+    logic signed [31:0] program_voltage;  // Programming voltage value to be chose (+0.3/-0.2 V), depending on weight to be programmed
+
 
     typedef enum logic [1:0] {
         IDLE,
         PROGRAM,
         FINISH
-    } state_t;
+    } state_t;  // FSM states: IDLE-> PROGRAM -> FINISH -> IDLE
 
     state_t state;
 
 
-    // ============================================================
-    // WEIGHT → TARGET STATE
-    //
-    // weight_data = 0..255
-    //
-    // target_state = weight_data × 65536 / 255
-    // ============================================================
-
     always_comb begin
 
         target_state =
-            (weight_data * STATE_SCALE) / 255;
+        (weight_data * STATE_SCALE) / 255; //Target state mapping logic -> (I/p weight * 65536)/255
 
-        // VTEAM minimum state
+        // Bounds the VTEAM state to it's minimum value
 
         if (target_state < 1)
             target_state = 1;
 
-        // VTEAM maximum state
+        // Bounds the VTEAM state to it's maximum value -> Ensures valid logic as defined in VTEAM model
+
 
         if (target_state > 65536)
             target_state = 65536;
@@ -128,9 +91,7 @@ module memristor_top #(
     end
 
 
-    // ============================================================
-    // SELECT CURRENT STATE OF SELECTED CELL
-    // ============================================================
+    // Choosing the memristor to be programmed and fetching it's current state
 
     always_comb begin
 
@@ -160,14 +121,14 @@ module memristor_top #(
         if (state == PROGRAM) begin
 
             if (selected_state + STATE_TOLERANCE
-                    < target_state) begin
+                < target_state) begin  // Checking whether selected state is less than target state, if TRUE -> apply V_UP = +0.30 V
 
                 program_voltage = V_UP;
 
             end
 
             else if (selected_state
-                    > target_state + STATE_TOLERANCE) begin
+                > target_state + STATE_TOLERANCE) begin  // Checking whether selected state is more than target state, if TRUE -> apply V_DOWN = -0.20 V
 
                 program_voltage = V_DOWN;
 
@@ -175,7 +136,7 @@ module memristor_top #(
 
             else begin
 
-                program_voltage = 32'sd0;
+                program_voltage = 32'sd0;  // If within tolerance, no need to change state value, program_voltage = 0 V
 
             end
 
@@ -184,14 +145,12 @@ module memristor_top #(
     end
 
 
-    // ============================================================
-    // PROGRAMMING FSM
-    // ============================================================
+  // Sequential block, changes happen on clock edge
 
     always_ff @(posedge clk) begin
 
         if (rst) begin
-
+// Default state is IDLE, if rst = 1, FSM starts at that state
             state <= IDLE;
             busy  <= 1'b0;
             done  <= 1'b0;
@@ -200,43 +159,35 @@ module memristor_top #(
         else begin
 
             case (state)
-
-                // ------------------------------------------------
-                // IDLE
-                // ------------------------------------------------
+                // Initial state -> IDLE, both busy and done = 0 (No programming happening)
 
                 IDLE: begin
 
                     busy <= 1'b0;
                     done <= 1'b0;
 
-                    if (load_enable) begin
+                    if (load_enable) begin  // Load_enable indicates that memristor is to be programmed
 
-                        state <= PROGRAM;
-                        busy  <= 1'b1;
+                        state <= PROGRAM; // FSM transitions to PROGRAM state
+                        busy  <= 1'b1; // busy is enabled
 
                     end
 
                 end
 
 
-                // ------------------------------------------------
-                // PROGRAM
-                // ------------------------------------------------
-
                 PROGRAM: begin
 
-                    busy <= 1'b1;
+                    busy <= 1'b1; 
                     done <= 1'b0;
 
-                    // Stop programming once target is reached
-
+                    // Logic to check whether memristor has reached target_state or not
                     if ((selected_state
                             + STATE_TOLERANCE >= target_state) &&
                         (selected_state
                             <= target_state + STATE_TOLERANCE)) begin
 
-                        state <= FINISH;
+                        state <= FINISH; //Once programming is done, the FSM transitions to FINISH
 
                     end
 
@@ -250,16 +201,13 @@ module memristor_top #(
                 FINISH: begin
 
                     busy  <= 1'b0;
-                    done  <= 1'b1;
+                    done  <= 1'b1; // Done signal is raised
 
-                    state <= IDLE;
+                    state <= IDLE; // FSM transitions back to IDLE, to wait for the next memristor to be programmed
 
                 end
 
-
-                // ------------------------------------------------
-                // SAFETY
-                // ------------------------------------------------
+                // Default state -> IDLE
 
                 default: begin
 
@@ -318,9 +266,7 @@ module memristor_top #(
     endgenerate
 
 
-    // ============================================================
-    // VTEAM MEMRISTOR ARRAY
-    // ============================================================
+    //VTEAM memristor array instantiation
 
     generate
 
@@ -362,24 +308,7 @@ module memristor_top #(
     endgenerate
 
 
-    // ============================================================
-    // RESISTANCE → DIGITAL WEIGHT
-    //
-    // VTEAM resistance equation:
-    //
-    // R = R_OFF - (R_OFF - R_ON) × w
-    //
-    // Therefore:
-    //
-    // w = (R_OFF - R)/(R_OFF - R_ON)
-    //
-    // Finally:
-    //
-    // digital_weight = w × 255
-    //
-    // This ensures that the MAC weight is derived from the
-    // actual VTEAM resistance.
-    // ============================================================
+// Maps memristor resistance to the MAC weights
 
     function automatic [7:0] resistance_to_weight(
         input logic [31:0] r_value
@@ -389,37 +318,27 @@ module memristor_top #(
 
         begin
 
-            // -----------------------------------------------
-            // OFF state
-            // -----------------------------------------------
 
             if (r_value >= 16000) begin
 
-                resistance_to_weight = 8'd0;
+                resistance_to_weight = 8'd0; // If resistance value is >= R_OFF, weight = 0
 
             end
-
-            // -----------------------------------------------
-            // ON state
-            // -----------------------------------------------
 
             else if (r_value <= 100) begin
 
-                resistance_to_weight = 8'd255;
+                resistance_to_weight = 8'd255;  // If resistance value is <= R_ON, weight = 255
+ 
 
             end
-
-            // -----------------------------------------------
-            // Intermediate state
-            // -----------------------------------------------
-
+            
             else begin
 
                 weight_temp =
                     ((16000 - r_value) * 255)
                     /
                     (16000 - 100);
-
+                // Calculated for intermediate states using, ((R_OFF - R) * 255)/(R_OFF - R_ON)
 
                 // Saturation
 
@@ -440,9 +359,6 @@ module memristor_top #(
     endfunction
 
 
-    // ============================================================
-    // CONVERT ALL VTEAM RESISTANCES INTO MAC WEIGHTS
-    // ============================================================
 
     generate
 
@@ -455,7 +371,8 @@ module memristor_top #(
                     w[r][c] =
                         resistance_to_weight(
                             resistance[r][c]
-                        );
+                        );  
+                    // Maps memristance to weights, for each of the 16 memristors in the VTEAM array
 
                 end
 
@@ -465,12 +382,7 @@ module memristor_top #(
 
     endgenerate
 
-
-    // ============================================================
-    // MAC
-    //
-    // y[i] = Σ x[j] × w[j][i]
-    // ============================================================
+//MAC instantiation
 
     crossbar #(
         .I(COLS),
