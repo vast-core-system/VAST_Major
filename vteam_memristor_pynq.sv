@@ -72,7 +72,6 @@ parameter signed [31:0] W_MAX = 32'd65536;   // 1.0
 
 
 // VTEAM state update
-//-----------------------------------------------------------
 
 always @(posedge clk or posedge rst) begin
 
@@ -106,7 +105,7 @@ always @(posedge clk or posedge rst) begin
         // Positive voltage region
         else if ($signed(voltage) >= $signed(V_OFF)) begin
 
-            f_voltage = (K_OFF *(((((voltage <<< 16) / V_OFF)- 32'sd65536)** ALPHA_OFF) >>> 16))>>> 16;
+            f_voltage = (K_OFF *(((((voltage <<< 16) / V_OFF)- 32'sd65536) ** ALPHA_OFF) >>> 16))>>> 16;
 
         end
 
