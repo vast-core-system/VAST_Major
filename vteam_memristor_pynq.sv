@@ -14,12 +14,12 @@ module vteam_memristor (
     input signed [31:0] voltage,
 
     // Memristor outputs
-    output reg [31:0] resistance,
-    output reg signed [31:0] current,
-    output reg [31:0] state_var,
+    output reg [31:0] resistance,   //32 bit
+    output reg signed [31:0] current,  //32 bit signed
+    output reg [31:0] state_var,  //32 bit 
 
     // Ternary representation of the memristor state
-    output reg [1:0] ternary_output
+    output reg [1:0] ternary_output  // 2 bits
 );
 
 
@@ -27,7 +27,7 @@ module vteam_memristor (
 // VTEAM parameters
 
 // Non-linearity exponents
-parameter integer ALPHA_ON  = 2;
+parameter integer ALPHA_ON  = 2; //integer values because it is raised to the power
 parameter integer ALPHA_OFF = 2;
 
 // Voltage switching thresholds
@@ -48,8 +48,8 @@ parameter signed [31:0] K_OFF =  32'd1311;   // +0.02
 
 
 // Resistance values
-parameter [31:0] R_ON  = 32'd100;
-parameter [31:0] R_OFF = 32'd16000;
+    parameter [31:0] R_ON  = 32'd100;   //100 Ohm
+    parameter [31:0] R_OFF = 32'd16000;  //16k Ohm
 
 
 // Initial state of the memristor
@@ -67,13 +67,13 @@ reg signed [63:0] temp_w;
 
 
 // State limits
-parameter signed [31:0] W_MIN = 32'd1;
+parameter signed [31:0] W_MIN = 32'd1;   //approx 0.0001
 parameter signed [31:0] W_MAX = 32'd65536;   // 1.0
 
 
 // VTEAM state update
 
-always @(posedge clk or posedge rst) begin
+    always @(posedge clk or posedge rst) begin  //asynchronous reset
 
     if (rst) begin
 
@@ -81,11 +81,11 @@ always @(posedge clk or posedge rst) begin
         state_var <= W_INIT;
 
         // Calculate initial resistance
-        resistance <= ((R_ON * W_INIT) >> 16) + ((R_OFF * (32'd65536 - W_INIT)) >> 16);
+        resistance <= ((R_ON * W_INIT) >> 16) + ((R_OFF * (32'd65536 - W_INIT)) >> 16);  //R = Ron(w) + Roff(1-w)
 
-        current <= 32'd0;
-        dw_dt <= 32'd0;
-        w_bounded <= W_INIT;
+        current <= 32'd0;  //0 A
+        dw_dt <= 32'd0;   //0
+        w_bounded <= W_INIT;  //0.1
 
     end
 
@@ -96,29 +96,29 @@ always @(posedge clk or posedge rst) begin
         
 
         // Negative voltage region
-        if ($signed(voltage) <= $signed(V_ON)) begin
+        if ($signed(voltage) <= $signed(V_ON)) begin //f_voltage = K_on( V / V_on - 1)^Alpha_On
 
-            f_voltage = (K_ON * (((((voltage <<< 16) / V_ON) - 32'sd65536) ** ALPHA_ON) >>> 16))>>> 16;
+            f_voltage = (K_ON * (((((voltage <<< 16) / V_ON) - 32'sd65536) ** ALPHA_ON) >>> 16))>>> 16;   //f_voltage = -0.02( (V / -0.15) - 1)^2
 
         end
 
         // Positive voltage region
-        else if ($signed(voltage) >= $signed(V_OFF)) begin
+        else if ($signed(voltage) >= $signed(V_OFF)) begin //f_voltage = K_off( V / V_off
 
-            f_voltage = (K_OFF *(((((voltage <<< 16) / V_OFF)- 32'sd65536) ** ALPHA_OFF) >>> 16))>>> 16;
+            f_voltage = (K_OFF *(((((voltage <<< 16) / V_OFF)- 32'sd65536) ** ALPHA_OFF) >>> 16))>>> 16;  //f_voltage = +0.02( (V / +0.2) - 1)^2
 
         end
 
         // Between the two thresholds, state does not change
         else begin
 
-            f_voltage = 32'd0;
+            f_voltage = 32'd0; //0
 
         end
 
 
         
-        // Window function
+        // Biolek Window function
         
         // f(w) = 1 - (2*w - 1)^20
         
@@ -145,14 +145,14 @@ always @(posedge clk or posedge rst) begin
         // Update state
     
 
-        w_bounded = state_var + dw_dt;
+        w_bounded = state_var + dw_dt;   
 
         // Keep state within valid range
         if (w_bounded < W_MIN)
-            w_bounded = W_MIN;
+            w_bounded = W_MIN;  //0.0001
 
         else if (w_bounded > W_MAX)
-            w_bounded = W_MAX;
+            w_bounded = W_MAX;  //1
 
         state_var <= w_bounded;
 
@@ -163,7 +163,7 @@ always @(posedge clk or posedge rst) begin
         // R = R_ON*w + R_OFF*(1-w)
 
 
-        resistance <= ((R_ON * w_bounded) >> 16) + ((R_OFF * (32'd65536 - w_bounded)) >> 16);
+        resistance <= ((R_ON * w_bounded) >> 16) + ((R_OFF * (32'd65536 - w_bounded)) >> 16);   // R = Ron (w) + Roff ( 1- w )
 
 
         
@@ -179,16 +179,16 @@ always @(posedge clk or posedge rst) begin
         // Convert state into ternary output
 
 
-        if (w_bounded <= 32'd19661) begin
+        if (w_bounded <= 32'd19661) begin  // 0.3
             ternary_output <= 2'b00;
         end
 
-        else if (w_bounded <= 32'd39322) begin
+        else if (w_bounded <= 32'd39322) begin  // 0.6
             ternary_output <= 2'b01;
         end
 
         else begin
-            ternary_output <= 2'b10;
+            ternary_output <= 2'b10;  
         end
 
     end
